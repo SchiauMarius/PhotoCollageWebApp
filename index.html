@@ -78,11 +78,11 @@ button.primary:hover:not(:disabled) { background: #1d4ed8; }
 .preview { display: flex; flex-direction: column; align-items: center; }
 .canvas-wrap { position: relative; width: 100%; max-width: 640px; aspect-ratio: 1; background: #e5e7eb; border-radius: 8px; overflow: hidden; }
 .canvas-wrap canvas { width: 100%; height: 100%; display: none; }
-.canvas-wrap.ready canvas { display: block; }
+.canvas-wrap.ready canvas { display: block; touch-action: none; user-select: none; }
+.hint { margin: 10px 0 0; font-size: .85rem; color: #6b7280; }
 .canvas-wrap.ready .placeholder { display: none; }
 .placeholder { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #9ca3af; }
-
-</style>
+  </style>
 </head>
 <body>
   <header>
@@ -107,6 +107,7 @@ button.primary:hover:not(:disabled) { background: #1d4ed8; }
           <input id="bg" type="color" value="#ffffff">
         </label>
         <button id="shuffle" type="button" disabled>Try another layout</button>
+        <button id="reset" type="button" disabled>Reset positions</button>
         <button id="clear" type="button" disabled>Clear all</button>
       </div>
     </section>
@@ -116,6 +117,7 @@ button.primary:hover:not(:disabled) { background: #1d4ed8; }
         <canvas id="canvas" width="1600" height="1600"></canvas>
         <p id="placeholder" class="placeholder">Your collage will appear here</p>
       </div>
+      <p class="hint">Tip: drag a photo inside the collage to choose which part of it is visible.</p>
       <button id="download" type="button" class="primary" disabled>Download collage (PNG)</button>
     </section>
   </main>
@@ -170,6 +172,7 @@ const gapInput = $("gap");
 const bgInput = $("bg");
 const shuffleBtn = $("shuffle");
 const clearBtn = $("clear");
+const resetBtn = $("reset");
 const downloadBtn = $("download");
 
 /** @type {{url: string, img: HTMLImageElement, name: string}[]} */
@@ -185,7 +188,8 @@ function loadImage(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = () => resolve({ url, img, name: file.name });
+    // fx/fy = which part of the photo is visible: 0 = left/top edge, 0.5 = centered, 1 = right/bottom edge
+    img.onload = () => resolve({ url, img, name: file.name, fx: 0.5, fy: 0.5 });
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(file.name)); };
     img.src = url;
   });
@@ -236,13 +240,16 @@ function renderThumbs() {
   });
 }
 
-/** Draw img into the rect (x,y,w,h) using "cover" fit (centered crop). */
-function drawCover(img, x, y, w, h) {
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Draw the photo into the rect (x,y,w,h) using "cover" fit; photo.fx/fy choose the visible part. */
+function drawCover(photo, x, y, w, h) {
+  const img = photo.img;
   const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
   const sw = w / scale;
   const sh = h / scale;
-  const sx = (img.naturalWidth - sw) / 2;
-  const sy = (img.naturalHeight - sh) / 2;
+  const sx = (img.naturalWidth - sw) * photo.fx;
+  const sy = (img.naturalHeight - sh) * photo.fy;
   ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
 }
 
@@ -257,14 +264,86 @@ function drawCollage() {
   ctx.fillRect(0, 0, SIZE, SIZE);
 
   const area = SIZE - gap * 2; // outer margin equals the gap size
+  cells = [];
   layout.forEach(([x, y, w, h], i) => {
     const px = gap + x * area + gap / 2;
     const py = gap + y * area + gap / 2;
     const pw = w * area - gap;
     const ph = h * area - gap;
-    drawCover(photos[i].img, px, py, pw, ph);
+    cells.push({ x: px, y: py, w: pw, h: ph });
+    drawCover(photos[i], px, py, pw, ph);
   });
 }
+
+// ---- Drag a photo inside its cell to choose which part is visible ----
+let cells = []; // last drawn cell rectangles, in canvas pixels (same order as photos)
+let drag = null;
+
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) * (canvas.width / r.width),
+    y: (e.clientY - r.top) * (canvas.height / r.height),
+  };
+}
+
+function cellAt(p) {
+  for (let i = cells.length - 1; i >= 0; i--) {
+    const c = cells[i];
+    if (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h) return i;
+  }
+  return -1;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (!wrap.classList.contains("ready")) return;
+  const p = canvasPoint(e);
+  const i = cellAt(p);
+  if (i < 0) return;
+  const photo = photos[i];
+  const c = cells[i];
+  const img = photo.img;
+  const scale = Math.max(c.w / img.naturalWidth, c.h / img.naturalHeight);
+  drag = {
+    i, scale,
+    startX: p.x, startY: p.y,
+    fx: photo.fx, fy: photo.fy,
+    rangeX: img.naturalWidth - c.w / scale,  // how many source pixels can be panned horizontally
+    rangeY: img.naturalHeight - c.h / scale, // ...and vertically
+  };
+  canvas.setPointerCapture(e.pointerId);
+  canvas.style.cursor = "grabbing";
+  e.preventDefault();
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  const p = canvasPoint(e);
+  if (!drag) {
+    canvas.style.cursor = cellAt(p) >= 0 ? "grab" : "default";
+    return;
+  }
+  const photo = photos[drag.i];
+  // dragging the photo right/down reveals more of its left/top, so the focus moves the opposite way
+  const dx = (p.x - drag.startX) / drag.scale;
+  const dy = (p.y - drag.startY) / drag.scale;
+  if (drag.rangeX > 0.5) photo.fx = clamp(drag.fx - dx / drag.rangeX, 0, 1);
+  if (drag.rangeY > 0.5) photo.fy = clamp(drag.fy - dy / drag.rangeY, 0, 1);
+  drawCollage();
+});
+
+function endDrag(e) {
+  if (!drag) return;
+  drag = null;
+  canvas.style.cursor = "grab";
+  if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+}
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+
+resetBtn.addEventListener("click", () => {
+  photos.forEach((p) => { p.fx = 0.5; p.fy = 0.5; });
+  if (photos.length >= MIN_PHOTOS) drawCollage();
+});
 
 function refresh() {
   renderThumbs();
@@ -279,6 +358,7 @@ function refresh() {
   wrap.classList.toggle("ready", ready);
   downloadBtn.disabled = !ready;
   shuffleBtn.disabled = !ready;
+  resetBtn.disabled = !ready;
   if (ready) drawCollage();
 }
 
@@ -313,7 +393,6 @@ clearBtn.addEventListener("click", () => {
 downloadBtn.addEventListener("click", download);
 
 refresh();
-
-</script>
+  </script>
 </body>
 </html>
