@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Photo Collage</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Photo Collage</h1>
+    <p>Upload 3–7 photos. The best-fitting template is picked automatically.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <label id="dropzone" class="dropzone" for="fileInput">
+        <strong>Click to choose photos</strong> or drag &amp; drop them here
+        <input id="fileInput" type="file" accept="image/*" multiple hidden>
+      </label>
+      <p id="status" class="status">No photos yet (need 3–7).</p>
+      <ul id="thumbs" class="thumbs"></ul>
+
+      <div class="controls">
+        <label>Spacing
+          <input id="gap" type="range" min="0" max="60" value="16">
+        </label>
+        <label>Background
+          <input id="bg" type="color" value="#ffffff">
+        </label>
+        <button id="shuffle" type="button" disabled>Try another layout</button>
+        <button id="clear" type="button" disabled>Clear all</button>
+      </div>
+    </section>
+
+    <section class="panel preview">
+      <div class="canvas-wrap">
+        <canvas id="canvas" width="1600" height="1600"></canvas>
+        <p id="placeholder" class="placeholder">Your collage will appear here</p>
+      </div>
+      <button id="download" type="button" class="primary" disabled>Download collage (PNG)</button>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
